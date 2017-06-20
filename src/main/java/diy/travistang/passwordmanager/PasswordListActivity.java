@@ -2,7 +2,10 @@ package diy.travistang.passwordmanager;
 
 import android.content.ClipData;
 import android.content.ClipboardManager;
+import android.content.ContentValues;
+import android.content.Intent;
 import android.os.Bundle;
+import android.provider.MediaStore;
 import android.support.design.widget.FloatingActionButton;
 import android.support.design.widget.Snackbar;
 import android.support.v4.widget.SwipeRefreshLayout;
@@ -12,13 +15,15 @@ import android.util.Log;
 import android.view.View;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.view.ViewGroup;
+import android.view.animation.Animation;
+import android.view.animation.AnimationUtils;
 import android.widget.AdapterView;
 import android.widget.ListView;
 import android.widget.Toast;
+import android.net.Uri;
 
 import java.util.ArrayList;
-import java.util.Timer;
-import java.util.TimerTask;
 import java.util.stream.Collectors;
 
 import org.java_websocket.client.WebSocketClient;
@@ -31,18 +36,16 @@ public class PasswordListActivity extends AppCompatActivity {
     private ArrayList<Password> passwordList = new ArrayList<>();
     private PasswordArrayAdapter passwordListArrayAdapter;
 
-    public ArrayList<Password> getPasswordByName(String pwName)
+    private static int CAMERA_REQUEST_CODE = 1;
+    private static String CAMERA_TEMP_FILENAME = "temp_camera_img.jpg";
+    private boolean isFABOpen = false;
+
+    private String token = null; // TODO: temporary. Move this to persistent storage
+    public void setAuthenticationToken(String token)
     {
-        // TODO: how about removing a pw?
-        ArrayList<Password> res = (ArrayList<Password>)passwordList.stream().filter(pw -> pw.name.equals(pwName)).collect(Collectors.toList());
-        return res;
+        this.token = token;
     }
 
-    // TODO: return the "real" token from QR code
-    public String getAuthenticateToken()
-    {
-        return null;
-    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -53,9 +56,14 @@ public class PasswordListActivity extends AppCompatActivity {
 
         configureFloatingButton();
         configurePasswordListView();
-        configureSwipeView();
         // connect the socket
         configureSocket();
+    }
+    @Override
+    public void setContentView(int layout)
+    {
+        super.setContentView(layout);
+        configureSwipeView();
     }
 
     private void cancelRefresh()
@@ -67,7 +75,6 @@ public class PasswordListActivity extends AppCompatActivity {
             {
                 SwipeRefreshLayout layout = (SwipeRefreshLayout)findViewById(R.id.swipe_container);
                 layout.setRefreshing(false);
-                passwordListArrayAdapter.notifyDataSetChanged();
             }
         });
     }
@@ -113,7 +120,7 @@ public class PasswordListActivity extends AppCompatActivity {
                         pw.dateCreated = date;
 
                         passwordList.add(pw);
-
+                        passwordListArrayAdapter.notifyDataSetChanged();
                     }
                 }catch(Exception e)
                 {
@@ -138,6 +145,7 @@ public class PasswordListActivity extends AppCompatActivity {
     private void configureSwipeView()
     {
         SwipeRefreshLayout layout = (SwipeRefreshLayout)findViewById(R.id.swipe_container);
+
         layout.setOnRefreshListener(new SwipeRefreshLayout.OnRefreshListener() {
             @Override
             public void onRefresh() {
@@ -151,14 +159,66 @@ public class PasswordListActivity extends AppCompatActivity {
         });
     }
 
+    @Override
+    public void onBackPressed()
+    {
+        if(this.findViewById(R.id.toolbar) == null)
+        {
+            // inside the scanner
+            setContentView(R.layout.activity_password_list);
+        }else
+        {
+
+            // default behaviour
+            super.onBackPressed();
+        }
+    }
+    @Override
+    protected void onActivityResult(int requestCode,int resultCode,Intent data)
+    {
+        if(requestCode == CAMERA_REQUEST_CODE)
+        {
+            if(resultCode == RESULT_OK)
+            {
+                String qr = data.getStringExtra("QR");
+                Log.d("Password Activity", "got qr:" + qr);
+                // TODO: further authentication process
+                // check the QR code is of valid type
+                setAuthenticationToken(qr);
+            }
+        }
+    }
     private void configureFloatingButton()
     {
         FloatingActionButton fab = (FloatingActionButton) findViewById(R.id.fab);
+        FloatingActionButton scan_button = (FloatingActionButton) findViewById(R.id.scan_button);
+        scan_button.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                Intent qrTransitionIntent = new Intent(getApplicationContext(),QRScannerActivity.class);
+                startActivityForResult(qrTransitionIntent,CAMERA_REQUEST_CODE);
+            }
+        });
         fab.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                Snackbar.make(view, "Replace with your own action", Snackbar.LENGTH_LONG)
-                        .setAction("Action", null).show();
+                if (isFABOpen)
+                {
+                    Animation fab_close = AnimationUtils.loadAnimation(getApplicationContext(),R.anim.fab_close);
+                    scan_button.startAnimation(fab_close);
+                    scan_button.setVisibility(View.INVISIBLE);
+                    scan_button.setClickable(false);
+                    isFABOpen = false;
+                    Log.d("FAB","FAB closed");
+                }else
+                {
+                    Animation fab_open = AnimationUtils.loadAnimation(getApplicationContext(),R.anim.fab_open);
+                    scan_button.startAnimation(fab_open);
+                    scan_button.setVisibility(View.VISIBLE);
+                    scan_button.setClickable(true);
+                    isFABOpen = true;
+                    Log.d("FAB","FAB opened");
+                }
             }
         });
 
