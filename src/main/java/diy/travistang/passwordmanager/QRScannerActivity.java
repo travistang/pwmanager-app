@@ -10,8 +10,10 @@ import android.support.design.widget.Snackbar;
 import android.support.v4.app.ActivityCompat;
 import android.util.Log;
 import android.view.View;
+import android.widget.Toast;
 
 import com.dlazaro66.qrcodereaderview.QRCodeReaderView;
+import com.google.zxing.common.StringUtils;
 import com.google.zxing.qrcode.encoder.QRCode;
 
 /**
@@ -32,25 +34,45 @@ public class QRScannerActivity extends Activity implements QRCodeReaderView.OnQR
         {
             requestCameraPermission();
         }
-        Log.d("QR Scanner","Permission granted");
         qrCodeReaderView.setOnQRCodeReadListener(this);
+
         qrCodeReaderView.setQRDecodingEnabled(true);
         qrCodeReaderView.setBackCamera();
+
     }
 
     @Override
     public void onQRCodeRead(String text, PointF[] points) {
         Log.d("QR Scanner",text);
-        Intent intent = new Intent();
-        intent.putExtra("QR",text);
-        setResult(RESULT_OK,intent);
-        finish();
+        // validate QR codes
+        // a valid QR code should contain a string of 256 alphanumeric characters
+
+        boolean isValidToken = false;
+        isValidToken &= (text.length() == 256);
+        for(char c : text.toCharArray())
+        {
+            isValidToken &= Character.isLetterOrDigit(c);
+        }
+
+        if(isValidToken) {
+            Intent intent = new Intent();
+            intent.putExtra("QR", text);
+            setResult(RESULT_OK, intent);
+            finish();
+        }else
+        {
+            // error message to the user: the qr found is not valid
+            Toast.makeText(this.getApplicationContext(),"Invalid QR Code",Toast.LENGTH_SHORT);
+        }
     }
 
     @Override
     protected void onResume() {
         super.onResume();
         qrCodeReaderView.startCamera();
+        Log.d("QR","Showing toast");
+        Toast.makeText(this.getBaseContext(),"Point the camera to the QR code shown on your password manager app to authorize this device. This page will go away upon a valid QR code is found or the back button is pressed.",Toast.LENGTH_LONG).show();
+
     }
 
     @Override
