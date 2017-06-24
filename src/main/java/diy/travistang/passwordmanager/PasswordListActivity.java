@@ -8,6 +8,7 @@ import android.content.DialogInterface;
 import android.content.Intent;
 import android.net.http.AndroidHttpClient;
 import android.os.Bundle;
+import android.os.Handler;
 import android.provider.MediaStore;
 import android.support.design.widget.BaseTransientBottomBar;
 import android.support.design.widget.FloatingActionButton;
@@ -35,6 +36,7 @@ import com.gordonwong.materialsheetfab.MaterialSheetFab;
 import com.gordonwong.materialsheetfab.MaterialSheetFabEventListener;
 import com.koushikdutta.async.AsyncServer;
 import com.koushikdutta.async.http.AsyncHttpClient;
+import com.koushikdutta.async.http.AsyncHttpGet;
 import com.koushikdutta.async.http.AsyncHttpPost;
 import com.koushikdutta.async.http.AsyncHttpResponse;
 import com.koushikdutta.async.http.callback.HttpConnectCallback;
@@ -46,7 +48,10 @@ import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.net.Socket;
 import java.util.ArrayList;
+import java.util.Timer;
+import java.util.TimerTask;
 import java.util.stream.Collectors;
 
 import org.java_websocket.client.WebSocketClient;
@@ -60,7 +65,6 @@ public class PasswordListActivity extends AppCompatActivity {
     private ArrayList<Password> passwordList = new ArrayList<>();
     private PasswordArrayAdapter passwordListArrayAdapter;
 
-//    private MaterialSheetFab materialSheetFab;
 
     private static int CAMERA_REQUEST_CODE = 1;
     private boolean isFABOpen = false;
@@ -84,7 +88,7 @@ public class PasswordListActivity extends AppCompatActivity {
         }
     }
 
-    private String getServerBaseURL()
+    public String getServerBaseURL()
     {
         try {
             FileInputStream file = openFileInput(HOST_URL_FILENAME);
@@ -120,7 +124,7 @@ public class PasswordListActivity extends AppCompatActivity {
     }
 
 
-    private String getAuthenticationToken()
+    public String getAuthenticationToken()
     {
         try {
             FileInputStream file = openFileInput(AUTH_TOKEN_FILENAME);
@@ -172,6 +176,11 @@ public class PasswordListActivity extends AppCompatActivity {
             }
         });
     }
+    public void clearPasswordList()
+    {
+        passwordList.clear();
+    }
+
     // everything related to websocket.
     // if either token or host url is not obtained this method will do nothing.
     private void configureSocket()
@@ -179,17 +188,17 @@ public class PasswordListActivity extends AppCompatActivity {
         // synthesise socket
         String token = getAuthenticationToken();
         String hostUrl = getServerBaseURL();
-
-        if(token == null || hostUrl == null)
+        if(token == null || hostUrl == null) {
+            Toast.makeText(getBaseContext(), "Cannot connect to host. Either the host or the authentication token is not defined. Please enter the host URL and scan the token provided",Toast.LENGTH_LONG).show();
             return;
+        }
+
         this.socket  = new WebSocketClient(URI.create(String.format("ws://%s/pwmanager/socket/%s", hostUrl,token)))
         {
             @Override
             public void onOpen(ServerHandshake handshakedata) {
                 Log.d("socket open","socket opened");
-                passwordList.clear();
-                JSONObject pw_list_request = new JSONObject();
-//                socket.send();
+                SocketAction.getPasswordList(socket,PasswordListActivity.this);
             }
 
             @Override
@@ -205,7 +214,8 @@ public class PasswordListActivity extends AppCompatActivity {
                         {
                             socket.close();
                             // inform the view that the refreshing has completed
-
+                            if (passwordList.isEmpty())
+                                Snackbar.make(getCurrentFocus(),"You have no password",Snackbar.LENGTH_INDEFINITE).show();
                             cancelRefresh();
                         }
                     }else
@@ -223,7 +233,12 @@ public class PasswordListActivity extends AppCompatActivity {
                         pw.dateCreated = date;
 
                         passwordList.add(pw);
-                        passwordListArrayAdapter.notifyDataSetChanged();
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                passwordListArrayAdapter.notifyDataSetChanged();
+                            }
+                        });
                     }
                 }catch(Exception e)
                 {
@@ -239,7 +254,7 @@ public class PasswordListActivity extends AppCompatActivity {
 
             @Override
             public void onError(Exception ex) {
-
+                ex.printStackTrace();
             }
         };
         socket.connect();
@@ -270,9 +285,11 @@ public class PasswordListActivity extends AppCompatActivity {
         {
             // inside the scanner
             setContentView(R.layout.activity_password_list);
-        }else
+        }else if(this.isFABOpen)
         {
-
+            // simulate the FAB click to close the FAB menu. That is probably what the user wants
+            this.findViewById(R.id.fab).performClick();
+        }else {
             // default behaviour
             super.onBackPressed();
         }
@@ -280,41 +297,39 @@ public class PasswordListActivity extends AppCompatActivity {
     @Override
     protected void onActivityResult(int requestCode,int resultCode,Intent data)
     {
-        if(requestCode == CAMERA_REQUEST_CODE)
+        if(requestCode == CAMERA_REQUEST_CODE && resultCode == RESULT_OK)
         {
-            if(resultCode == RESULT_OK)
+            String qr = data.getStringExtra("QR");
+            Log.d("Password Activity", "got qr:" + qr);
+
+            String postURL = String.format("http://%s/pwmanager/authorize/%s", getServerBaseURL(), qr);
+            AsyncHttpClient.getDefaultInstance().executeJSONObject(new AsyncHttpGet(postURL), new AsyncHttpClient.JSONObjectCallback()
             {
-                String qr = data.getStringExtra("QR");
-                Log.d("Password Activity", "got qr:" + qr);
-                // TODO: further authentication process
-                // check the QR code is of valid type
-
-                AsyncHttpClient client = new AsyncHttpClient(new AsyncServer());
-                String postURL = String.format("http://%s/pwmanager/authorize/%s", getServerBaseURL(), getAuthenticationToken());
-
-                client.execute(new AsyncHttpPost(postURL), new HttpConnectCallback() {
-                    @Override
-                    public void onConnectCompleted(Exception ex, AsyncHttpResponse response) {
-                        Log.d("Post response",response.message());
-                        try {
-                            JSONObject res = new JSONObject(response.message());
-                            if(res.getString("status").equals("ok"))
-                            {
-                                // the token is assigned to this device successfully
-                                PasswordListActivity.this.setAuthenticationToken(res.getString("token"));
-                            }else
-                            {
-                                Toast.makeText(PasswordListActivity.this.getBaseContext(),"Unable to authenticate this device",Toast.LENGTH_SHORT);
-                            }
-                        }catch (JSONException e)
+                @Override
+                public void onCompleted(Exception e, AsyncHttpResponse source, JSONObject result)
+                {
+                    try
+                    {
+                        if (result.getString("status").equals("ok"))
                         {
-                            Toast.makeText(PasswordListActivity.this.getBaseContext(),"Error response from server",Toast.LENGTH_SHORT);
+                            Log.d("QR Scanner","Authenticated");
+                            PasswordListActivity.this.setAuthenticationToken(result.getString("token"));
+                            Toast.makeText(PasswordListActivity.this.getBaseContext(),"Device authorized.",Toast.LENGTH_SHORT);
+                            configureSocket();
+                        }else
+                        {
+                            Toast.makeText(PasswordListActivity.this.getBaseContext(),"Unable to authenticate this device",Toast.LENGTH_SHORT).show();
                         }
+
+                    }catch(JSONException je)
+                    {
+                        Toast.makeText(PasswordListActivity.this.getBaseContext(),"Error response from server",Toast.LENGTH_SHORT).show();
                     }
-                });
-            }
+                }
+            });
         }
     }
+
     private void configureFloatingButton()
     {
         FloatingActionButton fab = (FloatingActionButton) findViewById(R.id.fab);

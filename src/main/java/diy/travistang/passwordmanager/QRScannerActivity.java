@@ -47,14 +47,14 @@ public class QRScannerActivity extends Activity implements QRCodeReaderView.OnQR
         // validate QR codes
         // a valid QR code should contain a string of 256 alphanumeric characters
 
-        boolean isValidToken = false;
-        isValidToken &= (text.length() == 256);
+        boolean isValidToken = (text.length() == 256);
         for(char c : text.toCharArray())
         {
             isValidToken &= Character.isLetterOrDigit(c);
         }
 
         if(isValidToken) {
+            Log.d("QR Scanner","token valid");
             Intent intent = new Intent();
             intent.putExtra("QR", text);
             setResult(RESULT_OK, intent);
@@ -62,7 +62,7 @@ public class QRScannerActivity extends Activity implements QRCodeReaderView.OnQR
         }else
         {
             // error message to the user: the qr found is not valid
-            Toast.makeText(this.getApplicationContext(),"Invalid QR Code",Toast.LENGTH_SHORT);
+            Toast.makeText(this.getApplicationContext(),"Invalid QR Code",Toast.LENGTH_SHORT).show();
         }
     }
 
