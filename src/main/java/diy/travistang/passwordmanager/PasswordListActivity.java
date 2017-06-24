@@ -17,6 +17,8 @@ import android.support.v4.widget.SwipeRefreshLayout;
 import android.support.v7.app.AlertDialog;
 import android.support.v7.app.AppCompatActivity;
 import android.support.v7.widget.Toolbar;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.util.Log;
 import android.view.ContextMenu;
 import android.view.View;
@@ -63,14 +65,16 @@ import java.net.URI;
 public class PasswordListActivity extends AppCompatActivity {
     private WebSocketClient socket;
     private ArrayList<Password> passwordList = new ArrayList<>();
+    private ArrayList<Password> shownPasswordList = new ArrayList<>(); // this one is for holding the filter result
+
     private PasswordArrayAdapter passwordListArrayAdapter;
+    private String filterString = "";
 
     private Timer timeoutTimer;
     private static int CAMERA_REQUEST_CODE = 1;
     private boolean isFABOpen = false;
     private static final String AUTH_TOKEN_FILENAME = "auth_token";
     private static final String HOST_URL_FILENAME = "host_url";
-    private String serverBaseURL = null;
 
     private void setServerBaseURL(String url)
     {
@@ -123,7 +127,10 @@ public class PasswordListActivity extends AppCompatActivity {
         }
     }
 
-
+    public ArrayList<Password> getShownPasswordList()
+    {
+        return shownPasswordList;
+    }
     public String getAuthenticationToken()
     {
         try {
@@ -235,8 +242,26 @@ public class PasswordListActivity extends AppCompatActivity {
 //                            socket.close();
                             // inform the view that the refreshing has completed
                             if (passwordList.isEmpty())
-                                Snackbar.make(getCurrentFocus(),"You have no password",Snackbar.LENGTH_INDEFINITE).show();
+                                Snackbar.make(findViewById(R.id.swipe_container),"You have no password",Snackbar.LENGTH_INDEFINITE).show();
                             cancelRefresh();
+                        }else if (action.equals("deleted"))
+                        {
+                            // TODO: handle deleting cases
+                            String pwName = msg.getString("name");
+                            for(Password pw : passwordList)
+                            {
+                                if(pw.name.equals(pwName))
+                                {
+                                    passwordList.remove(pw);
+                                }
+                            }
+                            runOnUiThread(new Runnable() {
+                                @Override
+                                public void run() {
+                                    Snackbar.make(findViewById(R.id.swipe_container),String.format("Password %s is deleted",pwName),Snackbar.LENGTH_SHORT);
+                                    passwordListArrayAdapter.notifyDataSetChanged();
+                                }
+                            });
                         }
                     }else
                     {
@@ -253,10 +278,11 @@ public class PasswordListActivity extends AppCompatActivity {
                         pw.dateCreated = date;
 
                         passwordList.add(pw);
+
                         runOnUiThread(new Runnable() {
                             @Override
                             public void run() {
-                                passwordListArrayAdapter.notifyDataSetChanged();
+                                applyPasswordFilter();
                             }
                         });
                     }
@@ -278,6 +304,20 @@ public class PasswordListActivity extends AppCompatActivity {
             }
         };
         socket.connect();
+    }
+
+    private void applyPasswordFilter()
+    {
+        shownPasswordList.clear();
+        shownPasswordList.addAll(passwordList);
+        if(filterString.length() > 0)
+        {
+            passwordListArrayAdapter.applyFilter(filterString);
+        }
+        else
+        {
+            passwordListArrayAdapter.notifyDataSetChanged();
+        }
     }
 
     private void configureSwipeView()
@@ -355,9 +395,45 @@ public class PasswordListActivity extends AppCompatActivity {
         FloatingActionButton fab = (FloatingActionButton) findViewById(R.id.fab);
         FloatingActionButton url_button = (FloatingActionButton) findViewById(R.id.url_button);
         FloatingActionButton scan_button = (FloatingActionButton) findViewById(R.id.scan_button);
+        FloatingActionButton filter_button = (FloatingActionButton) findViewById(R.id.filter_button);
         ArrayList<FloatingActionButton> buttons = new ArrayList<>();
         buttons.add(url_button);
         buttons.add(scan_button);
+        buttons.add(filter_button);
+        filter_button.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                String msg = "Search for password";
+                AlertDialog.Builder builder = new AlertDialog.Builder(PasswordListActivity.this);
+                builder.setTitle(msg);
+                final EditText input = new EditText(builder.getContext());
+                builder.setView(input);
+                input.setText(filterString);
+                input.addTextChangedListener(new TextWatcher() {
+                    @Override
+                    public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+
+                    }
+
+                    @Override
+                    public void onTextChanged(CharSequence s, int start, int before, int count) {
+                        filterString = s.toString();
+                        applyPasswordFilter();
+                    }
+
+                    @Override
+                    public void afterTextChanged(Editable s) {
+
+                    }
+                });
+                builder.setPositiveButton("OK", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                    }
+                });
+                builder.show();
+            }
+        });
         url_button.setOnClickListener(new View.OnClickListener()
         {
             @Override
@@ -438,8 +514,8 @@ public class PasswordListActivity extends AppCompatActivity {
     {
         // configure the password list view
         ListView passwordListView = (ListView)findViewById(R.id.passwordListView);
-        passwordListArrayAdapter = new PasswordArrayAdapter(this, R.layout.password_list_row,passwordList);
-        //TODO: authenticate this device
+        passwordListArrayAdapter = new PasswordArrayAdapter(this, R.layout.password_list_row,shownPasswordList);
+
         passwordListView.setAdapter(passwordListArrayAdapter);
         passwordListArrayAdapter.notifyDataSetChanged();
 
