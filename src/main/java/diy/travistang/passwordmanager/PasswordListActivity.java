@@ -65,7 +65,7 @@ public class PasswordListActivity extends AppCompatActivity {
     private ArrayList<Password> passwordList = new ArrayList<>();
     private PasswordArrayAdapter passwordListArrayAdapter;
 
-
+    private Timer timeoutTimer;
     private static int CAMERA_REQUEST_CODE = 1;
     private boolean isFABOpen = false;
     private static final String AUTH_TOKEN_FILENAME = "auth_token";
@@ -193,12 +193,32 @@ public class PasswordListActivity extends AppCompatActivity {
             return;
         }
 
+        if(timeoutTimer != null) {
+            timeoutTimer.cancel();
+            timeoutTimer = null;
+        }
+        timeoutTimer = new Timer();
+        timeoutTimer.schedule(new TimerTask() {
+            @Override
+            public void run() {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        Toast.makeText(getBaseContext(),"Unable to connect to server. Please try again later",Toast.LENGTH_SHORT).show();
+                        cancelRefresh();
+                    }
+                });
+                socket.close();
+            }
+        },6000);
         this.socket  = new WebSocketClient(URI.create(String.format("ws://%s/pwmanager/socket/%s", hostUrl,token)))
         {
             @Override
             public void onOpen(ServerHandshake handshakedata) {
                 Log.d("socket open","socket opened");
                 SocketAction.getPasswordList(socket,PasswordListActivity.this);
+                timeoutTimer.cancel();
+                timeoutTimer = null;
             }
 
             @Override
@@ -212,7 +232,7 @@ public class PasswordListActivity extends AppCompatActivity {
                         String action = msg.getString("action");
                         if(action.equals("done"))
                         {
-                            socket.close();
+//                            socket.close();
                             // inform the view that the refreshing has completed
                             if (passwordList.isEmpty())
                                 Snackbar.make(getCurrentFocus(),"You have no password",Snackbar.LENGTH_INDEFINITE).show();
