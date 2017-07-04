@@ -45,23 +45,32 @@ import com.koushikdutta.async.http.callback.HttpConnectCallback;
 
 import java.io.BufferedReader;
 import java.io.DataInputStream;
+import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.net.Socket;
+
 import java.util.ArrayList;
 import java.util.Timer;
 import java.util.TimerTask;
-import java.util.stream.Collectors;
 
+import org.java_websocket.client.DefaultSSLWebSocketClientFactory;
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.handshake.ServerHandshake;
 import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.net.URI;
+
+import javax.net.SocketFactory;
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLHandshakeException;
+import javax.net.ssl.SSLSocketFactory;
+
 public class PasswordListActivity extends AppCompatActivity {
     private WebSocketClient socket;
     private ArrayList<Password> passwordList = new ArrayList<>();
@@ -75,7 +84,7 @@ public class PasswordListActivity extends AppCompatActivity {
     private boolean isFABOpen = false;
     private static final String AUTH_TOKEN_FILENAME = "auth_token";
     private static final String HOST_URL_FILENAME = "host_url";
-
+    private static final String sslCertificateURL = "https://acme-v01.api.letsencrypt.org/acme/cert/032fcc594c13c11c69e67a6e5e4413e5fbc4";
     private void setServerBaseURL(String url)
     {
         try {
@@ -218,7 +227,8 @@ public class PasswordListActivity extends AppCompatActivity {
                 socket.close();
             }
         },6000);
-        this.socket  = new WebSocketClient(URI.create(String.format("ws://%s/pwmanager/socket/%s", hostUrl,token)))
+
+        this.socket  = new WebSocketClient(URI.create(String.format("wss://%s/pwmanager/socket/%s", hostUrl,token)))
         {
             @Override
             public void onOpen(ServerHandshake handshakedata) {
@@ -301,8 +311,44 @@ public class PasswordListActivity extends AppCompatActivity {
             @Override
             public void onError(Exception ex) {
                 ex.printStackTrace();
+                if(ex instanceof SSLHandshakeException) {
+                    // problem with certificate
+                    Utils.makeNoticeOnUiThread(PasswordListActivity.this, "Handshake with server failed. Trying to add certificate...", Toast.LENGTH_SHORT);
+
+                    // download certificate
+                    if(!Utils.downloadFileFromInternet(PasswordListActivity.this,sslCertificateURL,"cert.crt"))
+                    {
+                        Utils.makeNoticeOnUiThread(PasswordListActivity.this, "Unable to download certificate", Toast.LENGTH_LONG);
+                        return;
+                    }
+
+                    SSLContext sslContext = Utils.getSSLSocketFactory(PasswordListActivity.this,"cert.crt","PWManager CA");
+                    if (sslContext == null)
+                    {
+                        Utils.makeNoticeOnUiThread(PasswordListActivity.this,"Unable to save certificate", Toast.LENGTH_LONG);
+                        return;
+                    }
+
+                    this.setWebSocketFactory(new DefaultSSLWebSocketClientFactory(sslContext));
+                    Utils.makeNoticeOnUiThread(PasswordListActivity.this,"The certificates of the server is now added. Please refresh to connect to the server again.",Toast.LENGTH_LONG);
+
+                }else {
+                    // not a certificate problem
+                    Utils.makeNoticeOnUiThread(PasswordListActivity.this,"Error occured while trying to connect to the server. Please check your internet connection.",Toast.LENGTH_SHORT);
+                }
+
+                PasswordListActivity.this.cancelRefresh();
+
             }
         };
+        try
+        {
+            Utils.setupSSL(socket);
+        }catch(Exception e)
+        {
+            Utils.makeNoticeOnUiThread(PasswordListActivity.this,"Unable to use secure connection to server",Toast.LENGTH_LONG);
+            return;
+        }
         socket.connect();
     }
 
@@ -327,12 +373,15 @@ public class PasswordListActivity extends AppCompatActivity {
         layout.setOnRefreshListener(new SwipeRefreshLayout.OnRefreshListener() {
             @Override
             public void onRefresh() {
-                // TODO: really?
-                if (socket.getConnection().isConnecting())
+                if (socket == null)
+                {
+                    configureSocket();
+                    return;
+                }
+                else if (socket.getConnection().isConnecting())
                 {
                     socket.close();
                 }
-                // TODO: handle socket connection prerequisite
                 configureSocket();
             }
         });
@@ -362,28 +411,39 @@ public class PasswordListActivity extends AppCompatActivity {
             String qr = data.getStringExtra("QR");
             Log.d("Password Activity", "got qr:" + qr);
 
-            String postURL = String.format("http://%s/pwmanager/authorize/%s", getServerBaseURL(), qr);
+            String postURL = String.format("https://%s/pwmanager/authorize/%s", getServerBaseURL(), qr);
             AsyncHttpClient.getDefaultInstance().executeJSONObject(new AsyncHttpGet(postURL), new AsyncHttpClient.JSONObjectCallback()
             {
                 @Override
                 public void onCompleted(Exception e, AsyncHttpResponse source, JSONObject result)
                 {
+                    if(e != null)
+                    {
+                        e.printStackTrace();
+                        Utils.makeNoticeOnUiThread(PasswordListActivity.this,"Error response from server",Toast.LENGTH_SHORT);
+                        return;
+                    }
                     try
                     {
                         if (result.getString("status").equals("ok"))
                         {
                             Log.d("QR Scanner","Authenticated");
                             PasswordListActivity.this.setAuthenticationToken(result.getString("token"));
-                            Toast.makeText(PasswordListActivity.this.getBaseContext(),"Device authorized.",Toast.LENGTH_SHORT);
+                            Utils.makeNoticeOnUiThread(PasswordListActivity.this,"Device authorized.",Toast.LENGTH_SHORT);
                             configureSocket();
                         }else
                         {
-                            Toast.makeText(PasswordListActivity.this.getBaseContext(),"Unable to authenticate this device",Toast.LENGTH_SHORT).show();
+                            Utils.makeNoticeOnUiThread(PasswordListActivity.this,"Unable to authenticate this device",Toast.LENGTH_SHORT);
                         }
 
                     }catch(JSONException je)
                     {
-                        Toast.makeText(PasswordListActivity.this.getBaseContext(),"Error response from server",Toast.LENGTH_SHORT).show();
+                        Utils.makeNoticeOnUiThread(PasswordListActivity.this,"Error response from server",Toast.LENGTH_SHORT);
+                    }catch (NullPointerException ne)
+                    {
+                        // no JSON object
+                        ne.printStackTrace();
+                        Utils.makeNoticeOnUiThread(PasswordListActivity.this,"Unable to establish connection to server",Toast.LENGTH_SHORT);
                     }
                 }
             });
@@ -474,6 +534,14 @@ public class PasswordListActivity extends AppCompatActivity {
                     Toast.makeText(PasswordListActivity.this.getBaseContext(),"Please provide server URL before scanning QR code",Toast.LENGTH_LONG).show();
                     return;
                 }
+
+                // check if swipe view is refreshing
+                SwipeRefreshLayout swipeView = (SwipeRefreshLayout)findViewById(R.id.swipe_container);
+                if (swipeView.isRefreshing())
+                {
+                    cancelRefresh();
+                }
+
                 Intent qrTransitionIntent = new Intent(getApplicationContext(),QRScannerActivity.class);
                 startActivityForResult(qrTransitionIntent,CAMERA_REQUEST_CODE);
             }
